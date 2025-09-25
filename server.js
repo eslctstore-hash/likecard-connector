@@ -1,104 +1,108 @@
-const express = require("express");
-const morgan = require("morgan");
-const axios = require("axios");
-const crypto = require("crypto");
-const FormData = require("form-data");
+const express = require('express');
+const bodyParser = require('body-parser');
+const axios = require('axios');
+const crypto = require('crypto');
+const morgan = require('morgan');
+require('dotenv').config();
 
 const app = express();
+app.use(bodyParser.json());
+app.use(morgan('dev'));
 
-// middlewares
-app.use(express.json({ limit: "1mb" }));
-app.use(express.urlencoded({ extended: true }));
-app.use(morgan(":method :url :status :res[content-length] - :response-time ms"));
-
-// صفحة فحص سريعة
-app.get("/", (req, res) => {
-  res.send("✅ LikeCard connector is running. POST to /webhook");
-});
-
-app.get("/_health", (req, res) => {
-  res.json({ ok: true, time: new Date().toISOString(), uptime: process.uptime() });
-});
-
-// توليد الـ hash حسب متطلبات LikeCard
+// 🔑 دالة لتوليد الهاش حسب متطلبات LikeCard
 function generateHash(time) {
-  const email = (process.env.LIKECARD_EMAIL || "").toLowerCase().trim();
-  const phone = (process.env.LIKECARD_PHONE || "").trim();
-  const key = process.env.LIKECARD_HASH_KEY || "";
-  return crypto.createHash("sha256").update(`${time}${email}${phone}${key}`).digest("hex");
+  const email = process.env.LIKECARD_EMAIL.toLowerCase();
+  const phone = process.env.LIKECARD_PHONE;
+  const key = process.env.LIKECARD_HASH_KEY;
+
+  return crypto.createHash('sha256')
+    .update(time + email + phone + key)
+    .digest('hex');
 }
 
-// دالة إرسال الطلب إلى LikeCard
-async function createLikeCardOrder(productId, referenceId) {
-  const time = Math.floor(Date.now() / 1000).toString();
-  const hash = generateHash(time);
+// 🏠 مسار رئيسي للتأكد أن السيرفر شغال
+app.get('/', (req, res) => {
+  res.send('✅ LikeCard connector is running. POST to /webhook');
+});
 
-  const form = new FormData();
-  form.append("deviceId", process.env.LIKECARD_DEVICE_ID);
-  form.append("email", (process.env.LIKECARD_EMAIL || "").toLowerCase());
-  form.append("phone", process.env.LIKECARD_PHONE);
-  form.append("securityCode", process.env.LIKECARD_SECURITY_CODE);
-  form.append("langId", "1");
-  form.append("productId", String(productId));
-  form.append("referenceId", referenceId); // لازم يكون Unique
-  form.append("time", time);
-  form.append("hash", hash);
-  form.append("quantity", "1");
+// 🧪 مسار اختبار يدوي
+app.get('/test-likecard/:productId', async (req, res) => {
+  try {
+    const productId = req.params.productId;
+    const time = Math.floor(Date.now() / 1000).toString();
+    const hash = generateHash(time);
 
-  const resp = await axios.post("https://taxes.like4app.com/online/create_order", form, {
-    timeout: 15000,
-    headers: {
-      ...form.getHeaders(),
-      Accept: "application/json",
-      "User-Agent": "likecard-connector/1.0 (+render)"
-    },
-    validateStatus: () => true, // لا ترمِي exception على 4xx
-  });
+    const response = await axios.post(
+      'https://taxes.like4app.com/online/create_order',
+      {
+        deviceId: process.env.LIKECARD_DEVICE_ID,
+        email: process.env.LIKECARD_EMAIL,
+        securityCode: process.env.LIKECARD_SECURITY_CODE,
+        langId: "1",
+        productId,
+        referenceId: "Test_" + Date.now(),
+        time,
+        hash,
+        quantity: "1"
+      },
+      { headers: { "Content-Type": "multipart/form-data" } }
+    );
 
-  return resp;
-}
+    res.json(response.data);
+  } catch (err) {
+    console.error("❌ Test LikeCard Error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 
-// Webhook من Shopify (POST)
-app.post("/webhook", async (req, res) => {
-  const topic = req.get("x-shopify-topic");
+// 🪝 Webhook من Shopify
+app.post('/webhook', async (req, res) => {
+  const topic = req.headers['x-shopify-topic'];
   const order = req.body;
 
   console.log("📩 Shopify Topic:", topic);
-  console.log("🧾 Order name/id:", order?.name, order?.id);
-  console.log("🧺 Line items:", order?.line_items?.map(li => ({ title: li.title, sku: li.sku, id: li.product_id })));
+  console.log("🧾 Order name/id:", order.name, order.id);
+
+  const lineItems = order.line_items.map(item => ({
+    title: item.title,
+    sku: item.sku,
+    id: item.product_id
+  }));
+  console.log("🧺 Line items:", lineItems);
 
   try {
-    const first = order?.line_items?.[0];
-    const skuOrId = first?.sku || first?.variant_id || first?.product_id;
-    if (!skuOrId) throw new Error("No product SKU found in order");
+    // مثال: معالجة أول منتج فقط (تقدر توسعها لاحقًا)
+    const productId = lineItems[0]?.sku || "376";
 
-    const ref = `ORDER_${order?.id || Date.now()}`;
-    const likeResp = await createLikeCardOrder(String(skuOrId), ref);
+    const time = Math.floor(Date.now() / 1000).toString();
+    const hash = generateHash(time);
 
-    console.log("📦 LikeCard Response:", likeResp.data);
-    // رجّع 200 بسرعة عشان Shopify ما يعيد المحاولة كثير
-    if (likeResp.status >= 200 && likeResp.status < 300) {
-      return res.status(200).send("OK");
-    } else {
-      return res.status(502).send("LikeCard error");
-    }
-  } catch (e) {
-    console.error("❌ Error in webhook:", e.response?.data || e.message);
-    return res.status(500).send("Error");
+    const response = await axios.post(
+      'https://taxes.like4app.com/online/create_order',
+      {
+        deviceId: process.env.LIKECARD_DEVICE_ID,
+        email: process.env.LIKECARD_EMAIL,
+        securityCode: process.env.LIKECARD_SECURITY_CODE,
+        langId: "1",
+        productId,
+        referenceId: "Order_" + order.id,
+        time,
+        hash,
+        quantity: "1"
+      },
+      { headers: { "Content-Type": "multipart/form-data" } }
+    );
+
+    console.log("📦 LikeCard Response:", response.data);
+    res.status(200).json(response.data);
+
+  } catch (err) {
+    console.error("❌ LikeCard Error:", err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 
-// مسار اختبار يدوي من المتصفح
-app.get("/test-likecard/:productId", async (req, res) => {
-  try {
-    const resp = await createLikeCardOrder(req.params.productId, `MANUAL_${Date.now()}`);
-    res.status(resp.status).json(resp.data);
-  } catch (e) {
-    res.status(500).json({ error: e.response?.data || e.message });
-  }
-});
-
-// المنفذ
+// 🚀 شغل السيرفر على المنفذ اللي توفره Render
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
