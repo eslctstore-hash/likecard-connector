@@ -6,7 +6,12 @@ require('dotenv').config();
 const app = express();
 app.use(bodyParser.json());
 
-// استقبال Webhook من Shopify
+// ✅ Root Route للتجربة
+app.get('/', (req, res) => {
+  res.send("✅ Server is running OK");
+});
+
+// 📩 استقبال Webhook من Shopify
 app.post('/shopify/order', async (req, res) => {
   console.log('📩 Shopify Order:', req.body);
 
