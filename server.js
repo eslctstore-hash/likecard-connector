@@ -8,18 +8,18 @@ const crypto = require("crypto");
 const app = express();
 app.use(bodyParser.json());
 
-// ✅ دالة إنشاء الطلب في LikeCard
 async function createLikeCardOrder(productId, referenceId, quantity = 1) {
   try {
     const time = Math.floor(Date.now() / 1000);
+
+    // القيم من البيئة
     const email = process.env.MERCHANT_EMAIL.toLowerCase();
     const phone = process.env.MERCHANT_PHONE;
-    const hashKey = process.env.HASH_KEY;
+    const key = process.env.HASH_KEY;
 
-    const hash = crypto
-      .createHash("sha256")
-      .update(time + email + phone + hashKey)
-      .digest("hex");
+    // ✅ hash الصحيح
+    const raw = time + email + phone + key;
+    const hash = crypto.createHash("sha256").update(raw).digest("hex");
 
     const formData = new FormData();
     formData.append("deviceId", process.env.DEVICE_ID);
@@ -36,6 +36,7 @@ async function createLikeCardOrder(productId, referenceId, quantity = 1) {
     console.log("🔑 Payload to LikeCard:", {
       deviceId: process.env.DEVICE_ID,
       email,
+      phone,
       securityCode: process.env.SECURITY_CODE,
       langId: process.env.LANG_ID || "1",
       productId,
@@ -59,10 +60,9 @@ async function createLikeCardOrder(productId, referenceId, quantity = 1) {
   }
 }
 
-// ✅ استقبال Webhook من Shopify
 app.post("/webhook", async (req, res) => {
   const order = req.body;
-  console.log("📩 Incoming webhook:", order);
+  console.log("📩 Incoming webhook:", order.id);
 
   try {
     const lineItem = order.line_items[0];
@@ -79,8 +79,7 @@ app.post("/webhook", async (req, res) => {
     );
 
     if (likeCardResponse.response === 1) {
-      console.log("✅ LikeCard order created successfully:", likeCardResponse);
-      // هنا ممكن تحدث ملاحظات على الطلب في Shopify أو تخزن DB
+      console.log("✅ LikeCard order created successfully");
     } else {
       console.error("❌ LikeCard order failed:", likeCardResponse);
     }
