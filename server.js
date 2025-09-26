@@ -1,56 +1,159 @@
-app.post('/webhook', async (req, res) => {
-  try {
-    const order = req.body;
+const express = require('express');
+const crypto = require('crypto');
+const axios = require('axios');
+const FormData = require('form-data');
+const { shopifyApi, LATEST_API_VERSION } = require('@shopify/shopify-api');
+require('@shopify/shopify-api/adapters/node');
 
-    // سجل الـ topic لو موجود
-    console.log("📩 Shopify Topic:", req.headers['x-shopify-topic'] || '(manual/Postman test)');
+// --- 1. إعدادات متغيرات البيئة (التي وضعتها في Render) ---
+const {
+    MERCHANT_EMAIL, MERCHANT_PHONE, HASH_KEY, SECURITY_CODE, DEVICE_ID, LANG_ID,
+    SHOPIFY_SHOP_DOMAIN, SHOPIFY_ADMIN_TOKEN
+} = process.env;
 
-    // سجل الاسم و الـ id حتى لو ما موجودين
-    console.log("🧾 Order name/id:", order?.name || '(no name)', order?.id || '(no id)');
+const LIKE_CARD_BASE_URL = 'https://taxes.like4app.com/online';
 
-    // استخراج المنتجات من الطلب
-    const items = (order.line_items || []).map(i => ({
-      title: i.title,
-      sku: i.sku,
-      id: i.product_id || i.id
-    }));
-    console.log("🧺 Line items:", items);
-
-    // تجهيز بيانات LikeCard
-    const timestamp = Math.floor(Date.now() / 1000).toString();
-    const hash = crypto
-      .createHash('sha256')
-      .update(
-        timestamp +
-        process.env.LIKECARD_EMAIL.toLowerCase() +
-        process.env.LIKECARD_PHONE +
-        process.env.LIKECARD_HASH_KEY
-      )
-      .digest('hex');
-
-    // form-data
-    const form = new FormData();
-    form.append('deviceId', process.env.LIKECARD_DEVICE_ID);
-    form.append('email', process.env.LIKECARD_EMAIL);
-    form.append('securityCode', process.env.LIKECARD_SECURITY_CODE);
-    form.append('langId', '1');
-    form.append('productId', items[0]?.id || '');
-    form.append('referenceId', `order_${order?.id || Date.now()}`);
-    form.append('time', timestamp);
-    form.append('hash', hash);
-    form.append('quantity', '1');
-
-    const response = await axios.post(
-      'https://taxes.like4app.com/online/create_order',
-      form,
-      { headers: form.getHeaders() }
-    );
-
-    console.log("📦 LikeCard Response:", response.data);
-    res.status(200).json({ success: true, likecard: response.data });
-
-  } catch (err) {
-    console.error("❌ LikeCard Error:", err.response?.data || err.message);
-    res.status(500).json({ success: false, error: err.message });
-  }
+// --- 2. إعداد Shopify API Client ---
+const shopify = shopifyApi({
+    apiVersion: LATEST_API_VERSION,
+    apiSecretKey: 'dummy-secret', // ليس مطلوباً للـ Admin Token Access
+    adminApiAccessToken: SHOPIFY_ADMIN_TOKEN,
+    isCustomStoreApp: true,
+    hostName: SHOPIFY_SHOP_DOMAIN,
 });
+const session = shopify.session.customAppSession(SHOPIFY_SHOP_DOMAIN);
+const shopifyClient = new shopify.clients.Graphql({ session });
+
+// --- 3. الدوال المساعدة ---
+
+// دالة إنشاء الـ Hash
+function generateHash(time) {
+    const data = `${time}${MERCHANT_EMAIL.toLowerCase()}${MERCHANT_PHONE}${HASH_KEY}`;
+    return crypto.createHash('sha256').update(data).digest('hex');
+}
+
+// دالة موحدة لاستدعاءات LikeCard API
+async function likeCardApiCall(endpoint, data) {
+    const formData = new FormData();
+    for (const key in data) {
+        formData.append(key, data[key]);
+    }
+    const response = await axios.post(`${LIKE_CARD_BASE_URL}${endpoint}`, formData, {
+        headers: { ...formData.getHeaders() },
+        timeout: 15000 // 15 ثانية
+    });
+    return response.data;
+}
+
+// دالة تحديث ملاحظات الطلب في Shopify
+async function updateShopifyOrderNote(orderId, note) {
+    console.log(`Updating Shopify order ${orderId} with note.`);
+    try {
+        const response = await shopifyClient.query({
+            data: {
+                query: `mutation orderUpdate($input: OrderInput!) {
+                    orderUpdate(input: $input) {
+                        order { id, note }
+                        userErrors { field, message }
+                    }
+                }`,
+                variables: {
+                    input: {
+                        id: `gid://shopify/Order/${orderId}`,
+                        note: note
+                    }
+                }
+            }
+        });
+
+        if (response.body.data.orderUpdate.userErrors.length > 0) {
+            throw new Error(JSON.stringify(response.body.data.orderUpdate.userErrors));
+        }
+        console.log(`Successfully updated Shopify order ${orderId}.`);
+    } catch (error) {
+        console.error(`Failed to update Shopify order ${orderId}:`, error);
+        throw error;
+    }
+}
+
+// --- 4. نقطة النهاية الرئيسية للـ Webhook ---
+const app = express();
+app.use(express.json());
+
+// تم تحديث الرابط هنا ليتوافق مع إعداداتك في شوبيفاي
+app.post('/webhook', async (req, res) => {
+    res.status(200).send('Webhook received.'); // إرسال استجابة سريعة أولاً
+
+    // --- بدء المعالجة في الخلفية ---
+    try {
+        const shopifyOrder = req.body;
+        const orderId = shopifyOrder.id;
+        console.log(`--- Processing Shopify Order ID: ${orderId} ---`);
+
+        const customerEmail = shopifyOrder.customer.email;
+        let orderNotes = shopifyOrder.note || ""; // الحصول على الملاحظات الحالية
+
+        for (const item of shopifyOrder.line_items) {
+            const productId = item.sku;
+            if (!productId) {
+                console.warn(`Product "${item.name}" has no SKU. Skipping.`);
+                continue;
+            }
+
+            const referenceId = `SHOPIFY_${orderId}_${item.id}`;
+            const currentTime = Math.floor(Date.now() / 1000).toString();
+            
+            // الخطوة 1: إنشاء الطلب في LikeCard
+            console.log(`Creating LikeCard order for product SKU: ${productId}`);
+            const createOrderPayload = {
+                deviceId: DEVICE_ID, email: customerEmail, securityCode: SECURITY_CODE,
+                langId: LANG_ID, productId: productId, referenceId: referenceId,
+                time: currentTime, hash: generateHash(currentTime), quantity: '1'
+            };
+
+            await likeCardApiCall('/create_order', createOrderPayload);
+            console.log(`LikeCard order created with referenceId: ${referenceId}`);
+            
+            // الخطوة 2: الحصول على تفاصيل الطلب من LikeCard لجلب الكود
+            console.log(`Fetching details for referenceId: ${referenceId}`);
+            const detailsPayload = {
+                deviceId: DEVICE_ID, email: customerEmail, langId: LANG_ID,
+                securityCode: SECURITY_CODE, referenceId: referenceId,
+            };
+            
+            const orderDetails = await likeCardApiCall('/orders/details', detailsPayload);
+            
+            // !!! انتبه: قد تحتاج لتعديل السطر التالي حسب شكل الاستجابة الفعلي من LikeCard !!!
+            const serialCode = orderDetails.serials && orderDetails.serials[0] ? orderDetails.serials[0].serialCode : null;
+            const serialNumber = orderDetails.serials && orderDetails.serials[0] ? orderDetails.serials[0].serialNumber : null;
+
+            if (serialCode || serialNumber) {
+                console.log(`Code received for product ${item.name}: SUCCESS`);
+                const newNote = `
+--------------------------------
+المنتج: ${item.name}
+الكود: ${serialCode || 'N/A'}
+الرقم التسلسلي: ${serialNumber || 'N/A'}
+--------------------------------
+`;
+                orderNotes += newNote;
+            } else {
+                console.error("Could not find serial code in LikeCard response:", orderDetails);
+                orderNotes += `\n!! فشل استلام كود المنتج: ${item.name} !!`;
+            }
+        }
+
+        // الخطوة 3: تحديث طلب Shopify بالملاحظات الجديدة التي تحتوي على الأكواد
+        if (orderNotes !== shopifyOrder.note) {
+            await updateShopifyOrderNote(orderId, orderNotes);
+        }
+
+        console.log(`--- Finished processing Shopify Order ID: ${orderId} ---`);
+    } catch (error) {
+        console.error('An error occurred during webhook processing:', error.message);
+    }
+});
+
+// --- 5. تشغيل السيرفر ---
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
