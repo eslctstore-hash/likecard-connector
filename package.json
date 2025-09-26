@@ -1,16 +1,15 @@
 {
   "name": "likecard-connector",
   "version": "1.0.0",
-  "description": "Connects Shopify webhooks to the LikeCard API and updates orders.",
+  "description": "LikeCard ↔ Shopify connector",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
-  "author": "",
-  "license": "ISC",
   "dependencies": {
-    "@shopify/shopify-api": "^9.3.2",
-    "axios": "^1.7.2",
+    "@shopify/shopify-api": "^9.7.0",
+    "axios": "^1.6.8",
+    "crypto-js": "^4.2.0",
     "express": "^4.19.2",
     "form-data": "^4.0.0"
   }
