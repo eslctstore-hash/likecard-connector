@@ -101,7 +101,7 @@ app.post('/webhook', async (req, res) => {
             // Step 1: Create the order and CAPTURE the response
             console.log(`Creating LikeCard order for product SKU: ${productId}`);
             const createOrderPayload = {
-                deviceId: DEVICE_ID, email: MERCHANT_EMAIL, securityCode: SECURITY_CODE,
+                deviceId: DEVICE_ID, email: shopifyOrder.customer.email, securityCode: SECURITY_CODE,
                 langId: LANG_ID, productId: productId, referenceId: referenceId,
                 time: currentTime, hash: generateHash(currentTime), quantity: '1'
             };
@@ -166,4 +166,5 @@ app.post('/webhook', async (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 // End of the complete server.js file
+
 
