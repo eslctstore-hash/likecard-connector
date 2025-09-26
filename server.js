@@ -1,150 +1,98 @@
 // server.js
-const express = require('express');
-const crypto = require('crypto');
-const axios = require('axios');
-const FormData = require('form-data');
-const { shopifyApi, LATEST_API_VERSION } = require('@shopify/shopify-api');
-require('@shopify/shopify-api/adapters/node');
+const express = require("express");
+const bodyParser = require("body-parser");
+const fetch = require("node-fetch");
+const FormData = require("form-data");
+const crypto = require("crypto");
 
-// --- 1. متغيرات البيئة ---
-const {
-  MERCHANT_EMAIL, MERCHANT_PHONE, HASH_KEY, SECURITY_CODE, DEVICE_ID, LANG_ID,
-  SHOPIFY_SHOP_DOMAIN, SHOPIFY_ADMIN_TOKEN
-} = process.env;
-
-const LIKE_CARD_BASE_URL = 'https://taxes.like4app.com/online';
-
-// --- 2. إعداد Shopify API Client ---
-const shopify = shopifyApi({
-  apiVersion: LATEST_API_VERSION,
-  apiSecretKey: 'dummy-secret', // غير مستخدم مع Admin Token
-  adminApiAccessToken: SHOPIFY_ADMIN_TOKEN,
-  isCustomStoreApp: true,
-  hostName: SHOPIFY_SHOP_DOMAIN,
-});
-const session = shopify.session.customAppSession(SHOPIFY_SHOP_DOMAIN);
-const shopifyClient = new shopify.clients.Graphql({ session });
-
-// --- 3. دوال مساعدة ---
-// توليد الهاش
-function generateHash(time) {
-  const data = `${time}${MERCHANT_EMAIL.toLowerCase()}${MERCHANT_PHONE}${HASH_KEY}`;
-  return crypto.createHash('sha256').update(data).digest('hex');
-}
-
-// استدعاء API LikeCard
-async function likeCardApiCall(endpoint, data) {
-  const formData = new FormData();
-  for (const key in data) {
-    formData.append(key, data[key]);
-  }
-  const response = await axios.post(`${LIKE_CARD_BASE_URL}${endpoint}`, formData, {
-    headers: formData.getHeaders(),
-    timeout: 15000
-  });
-  return response.data;
-}
-
-// تحديث ملاحظات الطلب
-async function updateShopifyOrderNote(orderId, note) {
-  console.log(`📝 Updating Shopify order ${orderId}`);
-  const response = await shopifyClient.request(`
-    mutation orderUpdate($input: OrderInput!) {
-      orderUpdate(input: $input) {
-        order { id, note }
-        userErrors { field, message }
-      }
-    }`,
-    { variables: { input: { id: `gid://shopify/Order/${orderId}`, note } } }
-  );
-
-  if (response.body.data.orderUpdate.userErrors.length > 0) {
-    console.error("Shopify update error:", response.body.data.orderUpdate.userErrors);
-    throw new Error(JSON.stringify(response.body.data.orderUpdate.userErrors));
-  }
-  console.log(`✅ Shopify order ${orderId} updated`);
-}
-
-// --- 4. السيرفر ---
 const app = express();
-app.use(express.json());
+app.use(bodyParser.json());
 
-app.post('/webhook', async (req, res) => {
-  res.status(200).send('Webhook received');
+// ✅ دالة إنشاء الطلب في LikeCard
+async function createLikeCardOrder(productId, referenceId, quantity = 1) {
+  try {
+    const time = Math.floor(Date.now() / 1000);
+    const email = process.env.MERCHANT_EMAIL.toLowerCase();
+    const phone = process.env.MERCHANT_PHONE;
+    const hashKey = process.env.HASH_KEY;
+
+    const hash = crypto
+      .createHash("sha256")
+      .update(time + email + phone + hashKey)
+      .digest("hex");
+
+    const formData = new FormData();
+    formData.append("deviceId", process.env.DEVICE_ID);
+    formData.append("email", email);
+    formData.append("securityCode", process.env.SECURITY_CODE);
+    formData.append("langId", process.env.LANG_ID || "1");
+    formData.append("productId", productId);
+    formData.append("referenceId", referenceId);
+    formData.append("time", time.toString());
+    formData.append("hash", hash);
+    formData.append("quantity", quantity.toString());
+    formData.append("optionalFields", "");
+
+    console.log("🔑 Payload to LikeCard:", {
+      deviceId: process.env.DEVICE_ID,
+      email,
+      securityCode: process.env.SECURITY_CODE,
+      langId: process.env.LANG_ID || "1",
+      productId,
+      referenceId,
+      time,
+      hash,
+      quantity
+    });
+
+    const res = await fetch("https://taxes.like4app.com/online/create_order", {
+      method: "POST",
+      body: formData
+    });
+
+    const json = await res.json();
+    console.log("📦 LikeCard create response:", json);
+    return json;
+  } catch (err) {
+    console.error("❌ Error creating LikeCard order:", err.message);
+    return { response: 0, message: "Exception: " + err.message };
+  }
+}
+
+// ✅ استقبال Webhook من Shopify
+app.post("/webhook", async (req, res) => {
+  const order = req.body;
+  console.log("📩 Incoming webhook:", order);
 
   try {
-    const shopifyOrder = req.body;
-    console.log("📩 Incoming webhook:", JSON.stringify(shopifyOrder, null, 2));
+    const lineItem = order.line_items[0];
+    const productId = lineItem.sku;
+    const referenceId = order.id.toString();
+    const quantity = lineItem.quantity || 1;
 
-    const orderId = shopifyOrder.id;
-    let orderNotes = shopifyOrder.note || "";
+    console.log("🛒 Creating LikeCard order for SKU:", productId);
 
-    for (const item of shopifyOrder.line_items) {
-      const productId = item.sku;
-      if (!productId) continue;
+    const likeCardResponse = await createLikeCardOrder(
+      productId,
+      referenceId,
+      quantity
+    );
 
-      const referenceId = `SHOPIFY_${orderId}_${item.id}`;
-      const currentTime = Math.floor(Date.now() / 1000).toString();
-
-      // 1. إنشاء الطلب في LikeCard
-      const createOrderPayload = {
-        deviceId: DEVICE_ID,
-        email: MERCHANT_EMAIL,  // 👈 تم التعديل هنا
-        securityCode: SECURITY_CODE,
-        langId: LANG_ID,
-        productId: productId,
-        referenceId: referenceId,
-        time: currentTime,
-        hash: generateHash(currentTime),
-        quantity: '1'
-      };
-
-      console.log(`🛒 Creating LikeCard order for SKU: ${productId}`);
-      const createResp = await likeCardApiCall('/create_order', createOrderPayload);
-      console.log("📦 LikeCard create response:", createResp);
-
-      // تأخير بسيط
-      await new Promise(resolve => setTimeout(resolve, 3000));
-
-      // 2. جلب تفاصيل الطلب من LikeCard
-      const detailsPayload = {
-        deviceId: DEVICE_ID,
-        email: MERCHANT_EMAIL,
-        securityCode: SECURITY_CODE,
-        langId: LANG_ID,
-        referenceId: referenceId
-      };
-
-      const detailsResp = await likeCardApiCall('/orders/details', detailsPayload);
-      console.log("🔎 LikeCard order details:", detailsResp);
-
-      const serialCode = detailsResp.serials?.[0]?.serialCode || null;
-      const serialNumber = detailsResp.serials?.[0]?.serialNumber || null;
-
-      if (serialCode || serialNumber) {
-        orderNotes += `
---------------------------------
-المنتج: ${item.name}
-الكود: ${serialCode || 'N/A'}
-الرقم التسلسلي: ${serialNumber || 'N/A'}
---------------------------------
-`;
-      } else {
-        orderNotes += `\n⚠️ فشل استلام كود المنتج: ${item.name}`;
-      }
+    if (likeCardResponse.response === 1) {
+      console.log("✅ LikeCard order created successfully:", likeCardResponse);
+      // هنا ممكن تحدث ملاحظات على الطلب في Shopify أو تخزن DB
+    } else {
+      console.error("❌ LikeCard order failed:", likeCardResponse);
     }
 
-    // 3. تحديث الملاحظات في Shopify
-    if (orderNotes !== shopifyOrder.note) {
-      await updateShopifyOrderNote(orderId, orderNotes);
-    }
-
-    console.log(`--- Finished Shopify Order ${orderId} ---`);
+    res.status(200).send("Webhook processed");
   } catch (err) {
     console.error("❌ Webhook processing error:", err.message);
+    res.status(500).send("Error processing webhook");
   }
 });
 
-// --- 5. تشغيل السيرفر ---
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`🚀 Bridge running on port ${PORT}`);
+});
