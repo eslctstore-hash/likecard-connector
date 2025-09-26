@@ -7,9 +7,19 @@ require('@shopify/shopify-api/adapters/node');
 
 // --- 1. إعدادات متغيرات البيئة (التي وضعتها في Render) ---
 const {
-    MERCHANT_EMAIL, MERCHANT_PHONE, HASH_KEY, SECURITY_CODE, DEVICE_ID, LANG_ID,
-    SHOPIFY_SHOP_DOMAIN, SHOPIFY_ADMIN_TOKEN,
-    SERIAL_SECRET_KEY, SERIAL_SECRET_IV
+    DEVICE_ID,
+    EMAIL,
+    HASH_KEY,
+    LANG_ID,
+    MERCHANT_EMAIL,
+    MERCHANT_PHONE,
+    PHONE,
+    SECRET_IV,
+    SECURITY_CODE,
+    SHOPIFY_ADMIN_TOKEN,
+    SHOPIFY_SHOP_DOMAIN,
+    SERIAL_SECRET_KEY,
+    SERIAL_SECRET_IV
 } = process.env;
 
 const LIKE_CARD_BASE_URL = 'https://taxes.like4app.com/online';
@@ -17,7 +27,7 @@ const LIKE_CARD_BASE_URL = 'https://taxes.like4app.com/online';
 // --- 2. إعداد Shopify API Client ---
 const shopify = shopifyApi({
     apiVersion: LATEST_API_VERSION,
-    apiSecretKey: 'dummy-secret', // ليس مطلوباً للـ Admin Token Access
+    apiSecretKey: 'dummy-secret',
     adminApiAccessToken: SHOPIFY_ADMIN_TOKEN,
     isCustomStoreApp: true,
     hostName: SHOPIFY_SHOP_DOMAIN,
@@ -26,14 +36,11 @@ const session = shopify.session.customAppSession(SHOPIFY_SHOP_DOMAIN);
 const shopifyClient = new shopify.clients.Graphql({ session });
 
 // --- 3. الدوال المساعدة ---
-
-// دالة إنشاء الـ Hash
 function generateHash(time) {
     const data = `${time}${MERCHANT_EMAIL.toLowerCase()}${MERCHANT_PHONE}${HASH_KEY}`;
     return crypto.createHash('sha256').update(data).digest('hex');
 }
 
-// دالة موحدة لاستدعاءات LikeCard API
 async function likeCardApiCall(endpoint, data) {
     const formData = new FormData();
     for (const key in data) {
@@ -41,12 +48,11 @@ async function likeCardApiCall(endpoint, data) {
     }
     const response = await axios.post(`${LIKE_CARD_BASE_URL}${endpoint}`, formData, {
         headers: { ...formData.getHeaders() },
-        timeout: 15000 // 15 ثانية
+        timeout: 15000
     });
     return response.data;
 }
 
-// دالة تحديث ملاحظات الطلب في Shopify
 async function updateShopifyOrderNote(orderId, note) {
     console.log(`Updating Shopify order ${orderId} with note.`);
     try {
@@ -77,7 +83,6 @@ async function updateShopifyOrderNote(orderId, note) {
     }
 }
 
-// --- دالة لفك تشفير serialCode ---
 function decryptSerial(encryptedTxt, secretKey, secretIv) {
     const encryptMethod = 'aes-256-cbc';
     const key = crypto.createHash('sha256').update(secretKey).digest();
@@ -93,18 +98,15 @@ function decryptSerial(encryptedTxt, secretKey, secretIv) {
 const app = express();
 app.use(express.json());
 
-// تم تحديث الرابط هنا ليتوافق مع إعداداتك في شوبيفاي
 app.post('/webhook', async (req, res) => {
-    res.status(200).send('Webhook received.'); // إرسال استجابة سريعة أولاً
+    res.status(200).send('Webhook received.');
 
-    // --- بدء المعالجة في الخلفية ---
     try {
         const shopifyOrder = req.body;
         const orderId = shopifyOrder.id;
         console.log(`--- Processing Shopify Order ID: ${orderId} ---`);
 
-        const customerEmail = shopifyOrder.customer.email;
-        let orderNotes = shopifyOrder.note || ""; // الحصول على الملاحظات الحالية
+        let orderNotes = shopifyOrder.note || "";
 
         for (const item of shopifyOrder.line_items) {
             const productId = item.sku;
@@ -116,7 +118,7 @@ app.post('/webhook', async (req, res) => {
             const referenceId = `SHOPIFY_${orderId}_${item.id}`;
             const currentTime = Math.floor(Date.now() / 1000).toString();
 
-            // الخطوة 1: إنشاء الطلب في LikeCard
+            // --- إنشاء الطلب مع كل المتغيرات ---
             const createOrderPayload = {
                 deviceId: DEVICE_ID,
                 email: MERCHANT_EMAIL,
@@ -126,15 +128,24 @@ app.post('/webhook', async (req, res) => {
                 referenceId: referenceId,
                 time: currentTime,
                 hash: generateHash(currentTime),
-                quantity: '1'
+                quantity: '1',
+
+                // إضافة باقي المتغيرات (للتأكد)
+                envEmail: EMAIL,
+                hashKey: HASH_KEY,
+                merchantEmail: MERCHANT_EMAIL,
+                merchantPhone: MERCHANT_PHONE,
+                phone: PHONE,
+                secretIv: SECRET_IV,
+                shopifyAdminToken: SHOPIFY_ADMIN_TOKEN,
+                shopifyShopDomain: SHOPIFY_SHOP_DOMAIN
             };
 
             console.log("CreateOrder Payload being sent to LikeCard:", createOrderPayload);
             const createResponse = await likeCardApiCall('/create_order', createOrderPayload);
             console.log("LikeCard create_order response:", createResponse);
-            console.log(`LikeCard order created with referenceId: ${referenceId}`);
 
-            // --- الخطوة 2: المحاولة المتكررة للحصول على تفاصيل الطلب ---
+            // --- الحصول على تفاصيل الطلب ---
             let serialCode = null;
             let serialNumber = null;
             let productName = null;
@@ -168,17 +179,13 @@ app.post('/webhook', async (req, res) => {
                     }
                 }
 
-                if (serialCode) {
-                    break; // تم الحصول على الكود و نوقف المحاولات
-                }
-
+                if (serialCode) break;
                 if (attempt < 5) {
                     console.log("Code not ready yet, waiting 10 seconds before retry...");
-                    await new Promise(resolve => setTimeout(resolve, 10000)); // 10 ثواني
+                    await new Promise(resolve => setTimeout(resolve, 10000));
                 }
             }
 
-            // بعد انتهاء المحاولات
             if (serialCode) {
                 console.log(`Code received for product ${item.name}: SUCCESS`);
                 const newNote = `
@@ -195,7 +202,6 @@ app.post('/webhook', async (req, res) => {
             }
         }
 
-        // الخطوة 3: تحديث طلب Shopify بالملاحظات الجديدة التي تحتوي على الأكواد
         if (orderNotes !== shopifyOrder.note) {
             await updateShopifyOrderNote(orderId, orderNotes);
         }
@@ -209,4 +215,3 @@ app.post('/webhook', async (req, res) => {
 // --- 5. تشغيل السيرفر ---
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
-
