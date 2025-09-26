@@ -117,7 +117,7 @@ app.post('/webhook', async (req, res) => {
             // الخطوة 2: الحصول على تفاصيل الطلب من LikeCard لجلب الكود
             console.log(`Fetching details for referenceId: ${referenceId}`);
             const detailsPayload = {
-                deviceId: DEVICE_ID, email: customerEmail, langId: LANG_ID,
+                deviceId: DEVICE_ID, email: MERCHANT_EMAIL, langId: LANG_ID,
                 securityCode: SECURITY_CODE, referenceId: referenceId,
             };
             
@@ -157,3 +157,4 @@ app.post('/webhook', async (req, res) => {
 // --- 5. تشغيل السيرفر ---
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+
