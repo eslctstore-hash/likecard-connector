@@ -1,5 +1,4 @@
 // server.js
-require('dotenv').config();
 require('@shopify/shopify-api/adapters/node');
 
 const express = require('express');
@@ -366,3 +365,4 @@ app.listen(PORT, () => {
   console.log('🧪 Test: GET /test-likecard/<likecardProductId>');
   console.log('🔎 Get Codes: GET /order/<shopifyOrderId>/codes');
 });
+
