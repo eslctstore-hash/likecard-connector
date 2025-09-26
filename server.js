@@ -117,14 +117,21 @@ app.post('/webhook', async (req, res) => {
             const currentTime = Math.floor(Date.now() / 1000).toString();
 
             // الخطوة 1: إنشاء الطلب في LikeCard
-            console.log(`Creating LikeCard order for product SKU: ${productId}`);
             const createOrderPayload = {
-                deviceId: DEVICE_ID, email: customerEmail, securityCode: SECURITY_CODE,
-                langId: LANG_ID, productId: productId, referenceId: referenceId,
-                time: currentTime, hash: generateHash(currentTime), quantity: '1'
+                deviceId: DEVICE_ID,
+                email: customerEmail,
+                securityCode: SECURITY_CODE,
+                langId: LANG_ID,
+                productId: productId,
+                referenceId: referenceId,
+                time: currentTime,
+                hash: generateHash(currentTime),
+                quantity: '1'
             };
 
-            await likeCardApiCall('/create_order', createOrderPayload);
+            console.log("CreateOrder Payload being sent to LikeCard:", createOrderPayload);
+            const createResponse = await likeCardApiCall('/create_order', createOrderPayload);
+            console.log("LikeCard create_order response:", createResponse);
             console.log(`LikeCard order created with referenceId: ${referenceId}`);
 
             // --- الخطوة 2: المحاولة المتكررة للحصول على تفاصيل الطلب ---
@@ -134,13 +141,17 @@ app.post('/webhook', async (req, res) => {
             let orderDetails = null;
 
             for (let attempt = 0; attempt < 6; attempt++) {
-                console.log(`Fetching details (try ${attempt + 1}/6) for referenceId: ${referenceId}`);
                 const detailsPayload = {
-                    deviceId: DEVICE_ID, email: MERCHANT_EMAIL, langId: LANG_ID,
-                    securityCode: SECURITY_CODE, referenceId: referenceId,
+                    deviceId: DEVICE_ID,
+                    email: MERCHANT_EMAIL,
+                    langId: LANG_ID,
+                    securityCode: SECURITY_CODE,
+                    referenceId: referenceId,
                 };
 
+                console.log(`Fetching details (try ${attempt + 1}/6) with payload:`, detailsPayload);
                 orderDetails = await likeCardApiCall('/orders/details', detailsPayload);
+                console.log("LikeCard orders/details response:", orderDetails);
 
                 if (orderDetails.response === 1 && orderDetails.serials && orderDetails.serials[0]) {
                     productName = orderDetails.serials[0].productName;
