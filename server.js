@@ -119,7 +119,7 @@ app.post('/webhook', async (req, res) => {
             // الخطوة 1: إنشاء الطلب في LikeCard
             const createOrderPayload = {
                 deviceId: DEVICE_ID,
-                email: customerEmail,
+                email: MERCHANT_EMAIL,
                 securityCode: SECURITY_CODE,
                 langId: LANG_ID,
                 productId: productId,
@@ -209,3 +209,4 @@ app.post('/webhook', async (req, res) => {
 // --- 5. تشغيل السيرفر ---
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+
