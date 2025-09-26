@@ -1,4 +1,16 @@
 // server.js
+console.log("🔧 Environment check:", {
+  DEVICE_ID: process.env.DEVICE_ID,
+  MERCHANT_EMAIL: process.env.MERCHANT_EMAIL,
+  MERCHANT_PHONE: process.env.MERCHANT_PHONE,
+  SECURITY_CODE: process.env.SECURITY_CODE,
+  HASH_KEY: process.env.HASH_KEY,
+});
+
+
+
+
+
 const express = require("express");
 const bodyParser = require("body-parser");
 const fetch = require("node-fetch");
@@ -95,3 +107,4 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Bridge running on port ${PORT}`);
 });
+
