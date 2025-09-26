@@ -2,6 +2,7 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const axios = require('axios');
 const FormData = require('form-data');
+const crypto = require('crypto');
 require('dotenv').config();
 
 const app = express();
@@ -23,13 +24,12 @@ app.post('/webhook', async (req, res) => {
     const items = order.line_items.map(i => ({
       title: i.title,
       sku: i.sku,
-      id: i.product_id
+      id: i.product_id || i.id
     }));
     console.log("🧺 Line items:", items);
 
     // تجهيز بيانات LikeCard
     const timestamp = Math.floor(Date.now() / 1000).toString();
-    const crypto = require('crypto');
     const hash = crypto
       .createHash('sha256')
       .update(
@@ -45,8 +45,8 @@ app.post('/webhook', async (req, res) => {
     form.append('deviceId', process.env.LIKECARD_DEVICE_ID);
     form.append('email', process.env.LIKECARD_EMAIL);
     form.append('securityCode', process.env.LIKECARD_SECURITY_CODE);
-    form.append('langId', '1'); // 1 = عربي، 2 = إنجليزي (حسب API)
-    form.append('productId', items[0]?.sku || ''); // خذ أول SKU كتجربة
+    form.append('langId', '1'); // 1 = عربي
+    form.append('productId', items[0]?.id || ''); // <-- هنا صار يرسل id
     form.append('referenceId', `order_${order.id}`);
     form.append('time', timestamp);
     form.append('hash', hash);
