@@ -8,7 +8,8 @@ require('@shopify/shopify-api/adapters/node');
 // --- 1. إعدادات متغيرات البيئة (التي وضعتها في Render) ---
 const {
     MERCHANT_EMAIL, MERCHANT_PHONE, HASH_KEY, SECURITY_CODE, DEVICE_ID, LANG_ID,
-    SHOPIFY_SHOP_DOMAIN, SHOPIFY_ADMIN_TOKEN
+    SHOPIFY_SHOP_DOMAIN, SHOPIFY_ADMIN_TOKEN,
+    SERIAL_SECRET_KEY, SERIAL_SECRET_IV
 } = process.env;
 
 const LIKE_CARD_BASE_URL = 'https://taxes.like4app.com/online';
@@ -76,6 +77,18 @@ async function updateShopifyOrderNote(orderId, note) {
     }
 }
 
+// --- دالة لفك تشفير serialCode ---
+function decryptSerial(encryptedTxt, secretKey, secretIv) {
+    const encryptMethod = 'aes-256-cbc';
+    const key = crypto.createHash('sha256').update(secretKey).digest();
+    const iv = crypto.createHash('sha256').update(secretIv).digest().slice(0, 16);
+
+    const decipher = crypto.createDecipheriv(encryptMethod, key, iv);
+    let decoded = decipher.update(Buffer.from(encryptedTxt, 'base64'));
+    decoded = Buffer.concat([decoded, decipher.final()]);
+    return decoded.toString();
+}
+
 // --- 4. نقطة النهاية الرئيسية للـ Webhook ---
 const app = express();
 app.use(express.json());
@@ -114,9 +127,10 @@ app.post('/webhook', async (req, res) => {
             await likeCardApiCall('/create_order', createOrderPayload);
             console.log(`LikeCard order created with referenceId: ${referenceId}`);
 
-            // --- الخطوة 2: المحاولة المتكررة للحصول على الكود ---
+            // --- الخطوة 2: المحاولة المتكررة للحصول على تفاصيل الطلب ---
             let serialCode = null;
             let serialNumber = null;
+            let productName = null;
             let orderDetails = null;
 
             for (let attempt = 0; attempt < 6; attempt++) {
@@ -128,12 +142,22 @@ app.post('/webhook', async (req, res) => {
 
                 orderDetails = await likeCardApiCall('/orders/details', detailsPayload);
 
-                if (orderDetails.serials && orderDetails.serials[0]) {
-                    serialCode = orderDetails.serials[0].serialCode;
+                if (orderDetails.response === 1 && orderDetails.serials && orderDetails.serials[0]) {
+                    productName = orderDetails.serials[0].productName;
                     serialNumber = orderDetails.serials[0].serialNumber;
+
+                    try {
+                        serialCode = decryptSerial(
+                            orderDetails.serials[0].serialCode,
+                            SERIAL_SECRET_KEY,
+                            SERIAL_SECRET_IV
+                        );
+                    } catch (err) {
+                        console.error("Error decrypting serialCode:", err.message);
+                    }
                 }
 
-                if (serialCode || serialNumber) {
+                if (serialCode) {
                     break; // تم الحصول على الكود و نوقف المحاولات
                 }
 
@@ -144,18 +168,18 @@ app.post('/webhook', async (req, res) => {
             }
 
             // بعد انتهاء المحاولات
-            if (serialCode || serialNumber) {
+            if (serialCode) {
                 console.log(`Code received for product ${item.name}: SUCCESS`);
                 const newNote = `
 --------------------------------
-المنتج: ${item.name}
+المنتج: ${item.name} (${productName || 'N/A'})
 الكود: ${serialCode || 'N/A'}
 الرقم التسلسلي: ${serialNumber || 'N/A'}
 --------------------------------
 `;
                 orderNotes += newNote;
             } else {
-                console.error("Could not find serial code in LikeCard response after 6 tries:", orderDetails);
+                console.error("Could not retrieve or decrypt serial code after 6 tries:", orderDetails);
                 orderNotes += `\n!! فشل استلام كود المنتج: ${item.name} !!`;
             }
         }
