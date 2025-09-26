@@ -5,7 +5,7 @@ const FormData = require('form-data');
 const { shopifyApi, LATEST_API_VERSION } = require('@shopify/shopify-api');
 require('@shopify/shopify-api/adapters/node');
 
-// --- 1. إعدادات متغيرات البيئة (التي وضعتها في Render) ---
+// --- 1. إعدادات متغيرات البيئة ---
 const {
     DEVICE_ID,
     EMAIL,
@@ -24,7 +24,7 @@ const {
 
 const LIKE_CARD_BASE_URL = 'https://taxes.like4app.com/online';
 
-// --- 2. إعداد Shopify API Client ---
+// --- 2. Shopify API Client ---
 const shopify = shopifyApi({
     apiVersion: LATEST_API_VERSION,
     apiSecretKey: 'dummy-secret',
@@ -46,10 +46,16 @@ async function likeCardApiCall(endpoint, data) {
     for (const key in data) {
         formData.append(key, data[key]);
     }
-    const response = await axios.post(`${LIKE_CARD_BASE_URL}${endpoint}`, formData, {
+
+    const url = `${LIKE_CARD_BASE_URL}${endpoint}`;
+    console.log("Posting to:", url);
+    console.log("Payload (form-data):", data);
+
+    const response = await axios.post(url, formData, {
         headers: { ...formData.getHeaders() },
         timeout: 15000
     });
+
     return response.data;
 }
 
@@ -94,7 +100,7 @@ function decryptSerial(encryptedTxt, secretKey, secretIv) {
     return decoded.toString();
 }
 
-// --- 4. نقطة النهاية الرئيسية للـ Webhook ---
+// --- 4. Webhook ---
 const app = express();
 app.use(express.json());
 
@@ -130,7 +136,7 @@ app.post('/webhook', async (req, res) => {
                 hash: generateHash(currentTime),
                 quantity: '1',
 
-                // إضافة باقي المتغيرات (للتأكد)
+                // باقي المتغيرات للتجربة
                 envEmail: EMAIL,
                 hashKey: HASH_KEY,
                 merchantEmail: MERCHANT_EMAIL,
@@ -141,7 +147,6 @@ app.post('/webhook', async (req, res) => {
                 shopifyShopDomain: SHOPIFY_SHOP_DOMAIN
             };
 
-            console.log("CreateOrder Payload being sent to LikeCard:", createOrderPayload);
             const createResponse = await likeCardApiCall('/create_order', createOrderPayload);
             console.log("LikeCard create_order response:", createResponse);
 
@@ -160,7 +165,6 @@ app.post('/webhook', async (req, res) => {
                     referenceId: referenceId,
                 };
 
-                console.log(`Fetching details (try ${attempt + 1}/6) with payload:`, detailsPayload);
                 orderDetails = await likeCardApiCall('/orders/details', detailsPayload);
                 console.log("LikeCard orders/details response:", orderDetails);
 
