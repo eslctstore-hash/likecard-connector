@@ -113,6 +113,10 @@ app.post('/webhook', async (req, res) => {
 
             await likeCardApiCall('/create_order', createOrderPayload);
             console.log(`LikeCard order created with referenceId: ${referenceId}`);
+
+// -- Add this line --
+await new Promise(resolve => setTimeout(resolve, 3000)); // إضافة تأخير لمدة 3 ثواني
+
             
             // الخطوة 2: الحصول على تفاصيل الطلب من LikeCard لجلب الكود
             console.log(`Fetching details for referenceId: ${referenceId}`);
@@ -157,4 +161,5 @@ app.post('/webhook', async (req, res) => {
 // --- 5. تشغيل السيرفر ---
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+
 
