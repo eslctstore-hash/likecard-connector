@@ -121,10 +121,13 @@ app.post('/webhook', async (req, res) => {
                 continue;
             }
 
-            const referenceId = `SHOPIFY_${orderId}_${item.id}`;
+            // --- referenceId بصيغة test_<orderId>
+            const referenceId = `test_${orderId}`;
+            console.log("Generated referenceId:", referenceId);
+
             const currentTime = Math.floor(Date.now() / 1000).toString();
 
-            // --- إنشاء الطلب مع كل المتغيرات ---
+            // --- إنشاء الطلب ---
             const createOrderPayload = {
                 deviceId: DEVICE_ID,
                 email: MERCHANT_EMAIL,
@@ -134,17 +137,7 @@ app.post('/webhook', async (req, res) => {
                 referenceId: referenceId,
                 time: currentTime,
                 hash: generateHash(currentTime),
-                quantity: '1',
-
-                // باقي المتغيرات للتجربة
-                envEmail: EMAIL,
-                hashKey: HASH_KEY,
-                merchantEmail: MERCHANT_EMAIL,
-                merchantPhone: MERCHANT_PHONE,
-                phone: PHONE,
-                secretIv: SECRET_IV,
-                shopifyAdminToken: SHOPIFY_ADMIN_TOKEN,
-                shopifyShopDomain: SHOPIFY_SHOP_DOMAIN
+                quantity: '1'
             };
 
             const createResponse = await likeCardApiCall('/create_order', createOrderPayload);
