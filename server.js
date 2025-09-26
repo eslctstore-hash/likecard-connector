@@ -3,8 +3,6 @@ const axios = require('axios');
 const crypto = require('crypto');
 const FormData = require('form-data');
 
-require('dotenv').config();
-
 const {
   MERCHANT_EMAIL,
   MERCHANT_PHONE,
