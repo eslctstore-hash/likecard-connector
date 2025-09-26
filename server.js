@@ -134,16 +134,15 @@ for (let attempt = 0; attempt < 6; attempt++) {
     }
 
     if (serialCode || serialNumber) {
-        break; // تم الحصول على الكود، نوقف المحاولات
+        break;
     }
 
     if (attempt < 5) {
         console.log("Code not ready yet, waiting 10 seconds before retry...");
-        await new Promise(resolve => setTimeout(resolve, 10000)); // 10 ثواني
+        await new Promise(resolve => setTimeout(resolve, 10000));
     }
 }
 
-            
             // الخطوة 2: الحصول على تفاصيل الطلب من LikeCard لجلب الكود
             console.log(`Fetching details for referenceId: ${referenceId}`);
             const detailsPayload = {
@@ -187,5 +186,6 @@ for (let attempt = 0; attempt < 6; attempt++) {
 // --- 5. تشغيل السيرفر ---
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+
 
 
