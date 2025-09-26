@@ -139,4 +139,38 @@ app.post('/webhook', async (req, res) => {
 
                 if (attempt < 5) {
                     console.log("Code not ready yet, waiting 10 seconds before retry...");
+                    await new Promise(resolve => setTimeout(resolve, 10000)); // 10 ثواني
+                }
+            }
 
+            // بعد انتهاء المحاولات
+            if (serialCode || serialNumber) {
+                console.log(`Code received for product ${item.name}: SUCCESS`);
+                const newNote = `
+--------------------------------
+المنتج: ${item.name}
+الكود: ${serialCode || 'N/A'}
+الرقم التسلسلي: ${serialNumber || 'N/A'}
+--------------------------------
+`;
+                orderNotes += newNote;
+            } else {
+                console.error("Could not find serial code in LikeCard response after 6 tries:", orderDetails);
+                orderNotes += `\n!! فشل استلام كود المنتج: ${item.name} !!`;
+            }
+        }
+
+        // الخطوة 3: تحديث طلب Shopify بالملاحظات الجديدة التي تحتوي على الأكواد
+        if (orderNotes !== shopifyOrder.note) {
+            await updateShopifyOrderNote(orderId, orderNotes);
+        }
+
+        console.log(`--- Finished processing Shopify Order ID: ${orderId} ---`);
+    } catch (error) {
+        console.error('An error occurred during webhook processing:', error.message);
+    }
+});
+
+// --- 5. تشغيل السيرفر ---
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
