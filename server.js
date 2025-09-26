@@ -138,4 +138,5 @@ app.post('/webhook', async (req, res) => {
                 }
 
                 if (attempt < 5) {
-                    console.log("Co
+                    console.log("Code not ready yet, waiting 10 seconds before retry...");
+
