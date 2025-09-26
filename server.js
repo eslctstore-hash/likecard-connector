@@ -98,11 +98,11 @@ app.post('/webhook', async (req, res) => {
             const referenceId = `SHOPIFY_${orderId}_${item.id}`;
             const currentTime = Math.floor(Date.now() / 1000).toString();
             
-            // Step 1: Create the order and CAPTURE the response
+            // Step 1: Create the order using MERCHANT_EMAIL for authentication
             console.log(`Creating LikeCard order for product SKU: ${productId}`);
             const createOrderPayload = {
                 deviceId: DEVICE_ID,
-                email: shopifyOrder.customer.email,
+                email: MERCHANT_EMAIL, // Use Merchant Email for auth
                 securityCode: SECURITY_CODE,
                 langId: LANG_ID,
                 productId: productId,
