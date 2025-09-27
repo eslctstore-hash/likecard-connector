@@ -1,8 +1,8 @@
-// Start of the complete and corrected server.js file
+// Start of the complete server.js file with DIAGNOSTIC LOGGING
 const express = require("express");
 const axios = require("axios");
 const FormData = require("form-data");
-const CryptoJS = require("crypto-js"); // Using crypto-js as requested
+const CryptoJS = require("crypto-js");
 const { shopifyApi, LATEST_API_VERSION } = require("@shopify/shopify-api");
 require("@shopify/shopify-api/adapters/node");
 
@@ -29,8 +29,24 @@ const shopifyClient = new shopify.clients.Graphql({ session });
 
 function generateHash(time) {
     const raw = time + MERCHANT_EMAIL.toLowerCase() + MERCHANT_PHONE + HASH_KEY;
-    return CryptoJS.SHA256(raw).toString(CryptoJS.enc.Hex);
+
+    // --- DIAGNOSTIC LOGS ---
+    // These logs will show the exact values being used to create the hash.
+    // The brackets [] will make any extra spaces visible.
+    console.log("--- Hash Generation Details ---");
+    console.log(`Time: [${time}]`);
+    console.log(`Email: [${MERCHANT_EMAIL.toLowerCase()}]`);
+    console.log(`Phone: [${MERCHANT_PHONE}]`);
+    console.log(`Hash Key: [${HASH_KEY}]`);
+    console.log(`Raw String for Hash: [${raw}]`);
+    // --- END DIAGNOSTIC LOGS ---
+
+    const hash = CryptoJS.SHA256(raw).toString(CryptoJS.enc.Hex);
+    console.log(`Generated Hash: [${hash}]`);
+    console.log("-----------------------------");
+    return hash;
 }
+
 
 async function likeCardApiCall(endpoint, data) {
     const formData = new FormData();
@@ -98,14 +114,13 @@ app.post('/webhook', async (req, res) => {
             const referenceId = `SHOPIFY_${orderId}_${item.id}`;
             const time = Math.floor(Date.now() / 1000).toString();
 
-            // Step 1: Create LikeCard order with all required fields
             console.log(`Creating LikeCard order for product SKU: ${productId}`);
             const createOrderPayload = {
-                deviceId: 9b248ea71f0120c0e545294cb17e2bc379a141450c29a142918de8f7fdb1788f,
-                email: e.slct.store@gmail.com,
-                phone: 96879303771, // CORRECTED: Added the missing phone number
-                securityCode: 4a8db3af2d679007d4ed65a0e77ecd057f9b65f6f28cffd9e2f9a790b89271a2,
-                langId: 1,
+                deviceId: DEVICE_ID,
+                email: MERCHANT_EMAIL,
+                phone: MERCHANT_PHONE,
+                securityCode: SECURITY_CODE,
+                langId: LANG_ID,
                 productId: productId,
                 referenceId: referenceId,
                 time: time,
@@ -117,35 +132,20 @@ app.post('/webhook', async (req, res) => {
             console.log(`LikeCard order creation responded with:`, createOrderResponse);
 
             const likeCardOrderId = createOrderResponse.orderId;
-
             if (!likeCardOrderId) {
                 console.error("❌ Could not find 'orderId' in create order response.", createOrderResponse);
                 orderNotes += `\n!! فشل في استلام معرف الطلب من LikeCard للمنتج: ${item.name} !!`;
-                continue; 
+                continue;
             }
             
-            // Step 2: Fetch order details using the LikeCard Order ID
             console.log(`Fetching details for LikeCard Order ID: ${likeCardOrderId}`);
-            const detailsPayload = {
-                deviceId: DEVICE_ID,
-                email: MERCHANT_EMAIL,
-                langId: LANG_ID,
-                securityCode: SECURITY_CODE,
-                orderId: likeCardOrderId,
-            };
-
+            const detailsPayload = { deviceId: DEVICE_ID, email: MERCHANT_EMAIL, langId: LANG_ID, securityCode: SECURITY_CODE, orderId: likeCardOrderId, };
             const orderDetails = await likeCardApiCall("/orders/details", detailsPayload);
-
             const serialCode = orderDetails.serials && orderDetails.serials[0] ? orderDetails.serials[0].serialCode : null;
 
             if (serialCode) {
                 console.log(`✅ Code received for ${item.name}`);
-                orderNotes += `
---------------------------------
-المنتج: ${item.name}
-الكود: ${serialCode}
---------------------------------
-`;
+                orderNotes += `\n--------------------------------\nالمنتج: ${item.name}\nالكود: ${serialCode}\n--------------------------------\n`;
             } else {
                 console.error("❌ No code found in details response:", orderDetails);
                 orderNotes += `\n!! فشل استلام كود المنتج: ${item.name} !!`;
@@ -155,7 +155,6 @@ app.post('/webhook', async (req, res) => {
         if (orderNotes !== shopifyOrder.note) {
             await updateShopifyOrderNote(orderId, orderNotes);
         }
-
         console.log(`--- Finished processing Shopify Order ID: ${orderId} ---`);
     } catch (error) {
         console.error("❌ Error in webhook:", error.message);
@@ -165,4 +164,3 @@ app.post('/webhook', async (req, res) => {
 // --- 5. Run server ---
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
-
