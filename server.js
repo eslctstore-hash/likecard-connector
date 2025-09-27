@@ -1,4 +1,4 @@
-// Start of the final and complete server.js file
+// server.js
 const express = require("express");
 const axios = require("axios");
 const FormData = require("form-data");
@@ -6,141 +6,181 @@ const CryptoJS = require("crypto-js");
 const { shopifyApi, LATEST_API_VERSION } = require("@shopify/shopify-api");
 require("@shopify/shopify-api/adapters/node");
 
-// --- 1. Environment Variable Setup (from Render) ---
+// --- 1. Environment Variables (from Render) ---
 const {
-    MERCHANT_EMAIL, MERCHANT_PHONE, HASH_KEY, SECURITY_CODE, DEVICE_ID, LANG_ID,
-    SHOPIFY_SHOP_DOMAIN, SHOPIFY_ADMIN_TOKEN
+  MERCHANT_EMAIL,
+  MERCHANT_PHONE,
+  HASH_KEY,
+  SECURITY_CODE,
+  DEVICE_ID,
+  LANG_ID,
+  SHOPIFY_SHOP_DOMAIN,
+  SHOPIFY_ADMIN_TOKEN,
 } = process.env;
 
 const LIKE_CARD_BASE_URL = "https://taxes.like4app.com/online";
 
-// --- 2. Shopify API Client Setup ---
+// --- 2. Shopify API Client ---
 const shopify = shopifyApi({
-    apiVersion: LATEST_API_VERSION,
-    apiSecretKey: "dummy-secret",
-    adminApiAccessToken: SHOPIFY_ADMIN_TOKEN,
-    isCustomStoreApp: true,
-    hostName: SHOPIFY_SHOP_DOMAIN,
+  apiVersion: LATEST_API_VERSION,
+  apiSecretKey: "dummy-secret",
+  adminApiAccessToken: SHOPIFY_ADMIN_TOKEN,
+  isCustomStoreApp: true,
+  hostName: SHOPIFY_SHOP_DOMAIN,
 });
 const session = shopify.session.customAppSession(SHOPIFY_SHOP_DOMAIN);
-const shopifyClient = new shopify.clients.Graphql({ session });
+const gqlClient = new shopify.clients.Graphql({ session });
 
 // --- 3. Helper Functions ---
-
 function generateHash(time) {
-    const raw = time + MERCHANT_EMAIL.toLowerCase() + MERCHANT_PHONE + HASH_KEY;
-    return CryptoJS.SHA256(raw).toString(CryptoJS.enc.Hex);
+  const raw = time + MERCHANT_EMAIL.toLowerCase() + MERCHANT_PHONE + HASH_KEY;
+  return CryptoJS.SHA256(raw).toString(CryptoJS.enc.Hex);
 }
 
 async function likeCardApiCall(endpoint, data) {
-    const formData = new FormData();
-    for (const key in data) {
-        formData.append(key, data[key]);
-    }
-    const response = await axios.post(`${LIKE_CARD_BASE_URL}${endpoint}`, formData, {
-        headers: { ...formData.getHeaders() },
-        timeout: 15000
-    });
-    return response.data;
+  const formData = new FormData();
+  for (const key in data) formData.append(key, data[key]);
+  const response = await axios.post(`${LIKE_CARD_BASE_URL}${endpoint}`, formData, {
+    headers: { ...formData.getHeaders() },
+    timeout: 15000,
+  });
+  return response.data;
 }
 
-// UPDATED: This function now saves a note AND a metafield
-async function updateShopifyOrder(orderId, note, metafields) {
-    console.log(`Updating Shopify order ${orderId} with note and metafields.`);
-    try {
-        const response = await shopifyClient.query({
-            data: {
-                query: `mutation orderUpdate($input: OrderInput!) {
-                    orderUpdate(input: $input) {
-                        order { id, note }
-                        userErrors { field, message }
-                    }
-                }`,
-                variables: {
-                    input: {
-                        id: `gid://shopify/Order/${orderId}`,
-                        note: note,
-                        metafields: metafields
-                    }
-                }
-            }
-        });
-
-        if (response.body.data.orderUpdate.userErrors.length > 0) {
-            throw new Error(JSON.stringify(response.body.data.orderUpdate.userErrors));
+// تحديث الملاحظات (اختياري)
+async function updateShopifyOrderNote(orderId, note) {
+  await gqlClient.query({
+    data: {
+      query: `mutation orderUpdate($input: OrderInput!) {
+        orderUpdate(input: $input) {
+          order { id note }
+          userErrors { field message }
         }
-        console.log(`✅ Successfully updated Shopify order ${orderId}.`);
-    } catch (error) {
-        console.error(`❌ Failed to update Shopify order ${orderId}:`, error);
-        throw error;
-    }
+      }`,
+      variables: {
+        input: { id: `gid://shopify/Order/${orderId}`, note: note },
+      },
+    },
+  });
 }
 
+// ✅ دالة لتخزين السيريال في الـ Metafield الخاص بـ Line Item
+async function attachSerialToLineItem(lineItemId, serialCode) {
+  try {
+    const response = await gqlClient.query({
+      data: {
+        query: `mutation metafieldsSet($metafields: [MetafieldsSetInput!]!) {
+          metafieldsSet(metafields: $metafields) {
+            metafields {
+              id
+              namespace
+              key
+              value
+              type
+            }
+            userErrors {
+              field
+              message
+            }
+          }
+        }`,
+        variables: {
+          metafields: [
+            {
+              ownerId: `gid://shopify/LineItem/${lineItemId}`,
+              namespace: "custom",
+              key: "serials",
+              value: serialCode,
+              type: "single_line_text_field",
+            },
+          ],
+        },
+      },
+    });
 
-// --- 4. Main Webhook Endpoint ---
+    if (response.body.data.metafieldsSet.userErrors.length > 0) {
+      console.error("❌ Metafield error:", response.body.data.metafieldsSet.userErrors);
+    } else {
+      console.log(`✅ Serial stored in LineItem ${lineItemId}: ${serialCode}`);
+    }
+  } catch (err) {
+    console.error("❌ Error saving metafield:", err.message);
+  }
+}
+
+// --- 4. Webhook ---
 const app = express();
 app.use(express.json());
 
-app.post('/webhook', async (req, res) => {
-    res.status(200).send("Webhook received.");
+app.post("/webhook", async (req, res) => {
+  res.status(200).send("Webhook received.");
 
-    try {
-        const shopifyOrder = req.body;
-        const orderId = shopifyOrder.id;
-        console.log(`--- Processing Shopify Order ID: ${orderId} ---`);
+  try {
+    const shopifyOrder = req.body;
+    const orderId = shopifyOrder.id;
+    console.log(`--- Processing Shopify Order: ${orderId} ---`);
 
-        let orderNotes = shopifyOrder.note || "";
-        let codesForDisplay = ""; // This will be a simple string for the metafield
+    let orderNotes = shopifyOrder.note || "";
 
-        for (const item of shopifyOrder.line_items) {
-            const productId = item.sku;
-            if (!productId) { continue; }
+    for (const item of shopifyOrder.line_items) {
+      const productId = item.sku;
+      if (!productId) continue;
 
-            const referenceId = `SHOPIFY_${orderId}_${item.id}`;
-            const time = Math.floor(Date.now() / 1000).toString();
+      const referenceId = `SHOPIFY_${orderId}_${item.id}`;
+      const time = Math.floor(Date.now() / 1000).toString();
 
-            console.log(`Creating LikeCard order for product SKU: ${productId}`);
-            const createOrderPayload = { deviceId: DEVICE_ID, email: MERCHANT_EMAIL, phone: MERCHANT_PHONE, securityCode: SECURITY_CODE, langId: LANG_ID, productId, referenceId, time, hash: generateHash(time), quantity: "1" };
-            
-            // The create order response contains the serials directly
-            const createOrderResponse = await likeCardApiCall("/create_order", createOrderPayload);
-            console.log(`LikeCard order creation responded with:`, createOrderResponse);
+      const payload = {
+        deviceId: DEVICE_ID,
+        email: MERCHANT_EMAIL,
+        phone: MERCHANT_PHONE,
+        securityCode: SECURITY_CODE,
+        langId: LANG_ID,
+        productId,
+        referenceId,
+        time,
+        hash: generateHash(time),
+        quantity: "1",
+      };
 
-            const serialCode = createOrderResponse.serials && createOrderResponse.serials[0] ? createOrderResponse.serials[0].serialCode : null;
+      // إنشاء طلب LikeCard
+      const createRes = await likeCardApiCall("/create_order", payload);
+      const likeCardOrderId = createRes.orderId;
+      if (!likeCardOrderId) continue;
 
-            if (serialCode) {
-                console.log(`✅ Code received for ${item.name}`);
-                const productTitle = item.name;
-                
-                // Add to the admin note
-                orderNotes += `\n--------------------------------\nالمنتج: ${productTitle}\nالكود: ${serialCode}\n--------------------------------\n`;
-                
-                // Add to the customer-facing string
-                codesForDisplay += `المنتج: ${productTitle}\nالكود: ${serialCode}\n\n`;
-            } else {
-                console.error("❌ No code found in create order response:", createOrderResponse);
-                orderNotes += `\n!! فشل استلام كود المنتج: ${item.name} !!`;
-            }
-        }
-        
-        // Only update if we have codes to show
-        if (codesForDisplay) {
-            const metafields = [{
-                namespace: "digital_product",
-                key: "codes",
-                type: "multi_line_text_field", // Using a simple text type
-                value: codesForDisplay // Saving the pre-formatted string
-            }];
-            await updateShopifyOrder(orderId, orderNotes, metafields);
-        }
+      // جلب تفاصيل الطلب
+      const detailsPayload = {
+        deviceId: DEVICE_ID,
+        email: MERCHANT_EMAIL,
+        langId: LANG_ID,
+        securityCode: SECURITY_CODE,
+        orderId: likeCardOrderId,
+      };
+      const detailsRes = await likeCardApiCall("/orders/details", detailsPayload);
 
-        console.log(`--- Finished processing Shopify Order ID: ${orderId} ---`);
-    } catch (error) {
-        console.error("❌ Error in webhook:", error.message);
+      const serialCode =
+        detailsRes.serials && detailsRes.serials[0] ? detailsRes.serials[0].serialCode : null;
+
+      if (serialCode) {
+        orderNotes += `\nمنتج: ${item.name}\nالكود: ${serialCode}\n`;
+
+        // ✅ نخزن السيريال في Metafield لعنصر الطلب
+        await attachSerialToLineItem(item.id, serialCode);
+      } else {
+        orderNotes += `\n!! فشل استلام كود المنتج: ${item.name} !!`;
+      }
     }
+
+    // تحديث الملاحظات أيضًا (اختياري)
+    if (orderNotes !== shopifyOrder.note) {
+      await updateShopifyOrderNote(orderId, orderNotes);
+    }
+
+    console.log(`--- Finished Order: ${orderId} ---`);
+  } catch (err) {
+    console.error("❌ Webhook error:", err.message);
+  }
 });
 
-
-// --- 5. Run server ---
+// --- 5. Run Server ---
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
