@@ -1,4 +1,4 @@
-// Start of the complete server.js file with DIAGNOSTIC LOGGING
+// Start of the final and complete server.js file
 const express = require("express");
 const axios = require("axios");
 const FormData = require("form-data");
@@ -29,24 +29,8 @@ const shopifyClient = new shopify.clients.Graphql({ session });
 
 function generateHash(time) {
     const raw = time + MERCHANT_EMAIL.toLowerCase() + MERCHANT_PHONE + HASH_KEY;
-
-    // --- DIAGNOSTIC LOGS ---
-    // These logs will show the exact values being used to create the hash.
-    // The brackets [] will make any extra spaces visible.
-    console.log("--- Hash Generation Details ---");
-    console.log(`Time: [${time}]`);
-    console.log(`Email: [${MERCHANT_EMAIL.toLowerCase()}]`);
-    console.log(`Phone: [${MERCHANT_PHONE}]`);
-    console.log(`Hash Key: [${HASH_KEY}]`);
-    console.log(`Raw String for Hash: [${raw}]`);
-    // --- END DIAGNOSTIC LOGS ---
-
-    const hash = CryptoJS.SHA256(raw).toString(CryptoJS.enc.Hex);
-    console.log(`Generated Hash: [${hash}]`);
-    console.log("-----------------------------");
-    return hash;
+    return CryptoJS.SHA256(raw).toString(CryptoJS.enc.Hex);
 }
-
 
 async function likeCardApiCall(endpoint, data) {
     const formData = new FormData();
@@ -60,8 +44,9 @@ async function likeCardApiCall(endpoint, data) {
     return response.data;
 }
 
-async function updateShopifyOrderNote(orderId, note) {
-    console.log(`Updating Shopify order ${orderId} with note.`);
+// UPDATED: This function now saves a note AND a metafield
+async function updateShopifyOrder(orderId, note, metafields) {
+    console.log(`Updating Shopify order ${orderId} with note and metafields.`);
     try {
         const response = await shopifyClient.query({
             data: {
@@ -74,7 +59,8 @@ async function updateShopifyOrderNote(orderId, note) {
                 variables: {
                     input: {
                         id: `gid://shopify/Order/${orderId}`,
-                        note: note
+                        note: note,
+                        metafields: metafields
                     }
                 }
             }
@@ -95,7 +81,7 @@ const app = express();
 app.use(express.json());
 
 app.post('/webhook', async (req, res) => {
-    res.status(200).send("Webhook received."); // Reply fast
+    res.status(200).send("Webhook received.");
 
     try {
         const shopifyOrder = req.body;
@@ -103,58 +89,51 @@ app.post('/webhook', async (req, res) => {
         console.log(`--- Processing Shopify Order ID: ${orderId} ---`);
 
         let orderNotes = shopifyOrder.note || "";
+        const codesForMetafield = [];
 
         for (const item of shopifyOrder.line_items) {
             const productId = item.sku;
-            if (!productId) {
-                console.warn(`⚠️ Product "${item.name}" has no SKU. Skipping.`);
-                continue;
-            }
+            if (!productId) { continue; }
 
             const referenceId = `SHOPIFY_${orderId}_${item.id}`;
             const time = Math.floor(Date.now() / 1000).toString();
 
             console.log(`Creating LikeCard order for product SKU: ${productId}`);
-            const createOrderPayload = {
-                deviceId: DEVICE_ID,
-                email: MERCHANT_EMAIL,
-                phone: MERCHANT_PHONE,
-                securityCode: SECURITY_CODE,
-                langId: LANG_ID,
-                productId: productId,
-                referenceId: referenceId,
-                time: time,
-                hash: generateHash(time),
-                quantity: "1",
-            };
-
+            const createOrderPayload = { deviceId: DEVICE_ID, email: MERCHANT_EMAIL, phone: MERCHANT_PHONE, securityCode: SECURITY_CODE, langId: LANG_ID, productId, referenceId, time, hash: generateHash(time), quantity: "1" };
             const createOrderResponse = await likeCardApiCall("/create_order", createOrderPayload);
+            
+            // NOTE: The Create Order response now contains the serials directly!
+            // We don't need the second API call.
             console.log(`LikeCard order creation responded with:`, createOrderResponse);
 
-            const likeCardOrderId = createOrderResponse.orderId;
-            if (!likeCardOrderId) {
-                console.error("❌ Could not find 'orderId' in create order response.", createOrderResponse);
-                orderNotes += `\n!! فشل في استلام معرف الطلب من LikeCard للمنتج: ${item.name} !!`;
-                continue;
-            }
-            
-            console.log(`Fetching details for LikeCard Order ID: ${likeCardOrderId}`);
-            const detailsPayload = { deviceId: DEVICE_ID, email: MERCHANT_EMAIL, langId: LANG_ID, securityCode: SECURITY_CODE, orderId: likeCardOrderId, };
-            const orderDetails = await likeCardApiCall("/orders/details", detailsPayload);
-            const serialCode = orderDetails.serials && orderDetails.serials[0] ? orderDetails.serials[0].serialCode : null;
+            const serialCode = createOrderResponse.serials && createOrderResponse.serials[0] ? createOrderResponse.serials[0].serialCode : null;
 
             if (serialCode) {
                 console.log(`✅ Code received for ${item.name}`);
-                orderNotes += `\n--------------------------------\nالمنتج: ${item.name}\nالكود: ${serialCode}\n--------------------------------\n`;
+                const productTitle = item.name;
+                
+                // Add to the note for admin
+                orderNotes += `\n--------------------------------\nالمنتج: ${productTitle}\nالكود: ${serialCode}\n--------------------------------\n`;
+                
+                // Add to an array for the customer-facing metafield
+                codesForMetafield.push({ title: productTitle, code: serialCode });
+
             } else {
-                console.error("❌ No code found in details response:", orderDetails);
+                console.error("❌ No code found in create order response:", createOrderResponse);
                 orderNotes += `\n!! فشل استلام كود المنتج: ${item.name} !!`;
             }
         }
 
-        if (orderNotes !== shopifyOrder.note) {
-            await updateShopifyOrderNote(orderId, orderNotes);
+        if (codesForMetafield.length > 0) {
+            const metafields = [{
+                namespace: "digital_product",
+                key: "codes",
+                type: "json",
+                value: JSON.stringify(codesForMetafield)
+            }];
+            await updateShopifyOrder(orderId, orderNotes, metafields);
         }
+
         console.log(`--- Finished processing Shopify Order ID: ${orderId} ---`);
     } catch (error) {
         console.error("❌ Error in webhook:", error.message);
