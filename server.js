@@ -101,11 +101,11 @@ app.post('/webhook', async (req, res) => {
             // Step 1: Create LikeCard order with all required fields
             console.log(`Creating LikeCard order for product SKU: ${productId}`);
             const createOrderPayload = {
-                deviceId: DEVICE_ID,
-                email: MERCHANT_EMAIL,
-                phone: MERCHANT_PHONE, // CORRECTED: Added the missing phone number
-                securityCode: SECURITY_CODE,
-                langId: LANG_ID,
+                deviceId: 9b248ea71f0120c0e545294cb17e2bc379a141450c29a142918de8f7fdb1788f,
+                email: e.slct.store@gmail.com,
+                phone: 96879303771, // CORRECTED: Added the missing phone number
+                securityCode: 4a8db3af2d679007d4ed65a0e77ecd057f9b65f6f28cffd9e2f9a790b89271a2,
+                langId: 1,
                 productId: productId,
                 referenceId: referenceId,
                 time: time,
@@ -165,3 +165,4 @@ app.post('/webhook', async (req, res) => {
 // --- 5. Run server ---
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+
